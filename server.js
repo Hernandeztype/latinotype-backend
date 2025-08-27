@@ -27,7 +27,14 @@ async function escanear(url) {
   let browser;
   try {
     browser = await puppeteer.launch({
-      args: chromium.args,
+      args: [
+        ...chromium.args,
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--single-process",
+      ],
       defaultViewport: chromium.defaultViewport,
       executablePath: await chromium.executablePath(),
       headless: chromium.headless,
@@ -67,7 +74,7 @@ async function escanear(url) {
             }
           }
         } catch (e) {
-          // ignorar errores CORS
+          // ignorar errores por CORS
         }
       }
       return fonts;
