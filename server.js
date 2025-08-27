@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// 🔧 Normalizar fuentes
+// 🔧 Normalizar nombres de fuentes
 function normalizarFuente(nombre) {
   return nombre
     .toLowerCase()
@@ -22,23 +22,39 @@ function normalizarFuente(nombre) {
 
 // 🔎 Escanear una URL
 async function escanear(url) {
-  const browser = await puppeteer.launch({
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
-    headless: chromium.headless,
-  });
+  console.log(`\n🚀 Iniciando escaneo de: ${url}`);
 
-  const page = await browser.newPage();
-
+  let browser;
   try {
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-    await page.waitForTimeout(3000); // espera extra para que carguen fuentes externas
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    });
+    console.log("✅ Navegador lanzado");
+
+    const page = await browser.newPage();
+
+    // 👤 User-Agent real
+    await page.setUserAgent(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+        "AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/120.0 Safari/537.36"
+    );
+
+    console.log("🌍 Cargando página...");
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 120000 });
+    await page.waitForTimeout(5000);
+    console.log("✅ Página cargada");
 
     // 1. Extraer fuentes del DOM
     const domFonts = await page.evaluate(() =>
-      [...new Set([...document.querySelectorAll("*")].map((el) => getComputedStyle(el).fontFamily))]
+      [...new Set([...document.querySelectorAll("*")].map(
+        (el) => getComputedStyle(el).fontFamily
+      ))]
     );
+    console.log("🔤 Fuentes DOM detectadas:", domFonts);
 
     // 2. Extraer fuentes de CSS
     const cssFonts = await page.evaluate(() => {
@@ -51,55 +67,63 @@ async function escanear(url) {
             }
           }
         } catch (e) {
-          // ignorar estilos externos sin acceso
+          // ignorar errores CORS
         }
       }
       return fonts;
     });
+    console.log("📄 Fuentes CSS detectadas:", cssFonts);
 
     await browser.close();
+    console.log("✅ Navegador cerrado");
 
     // 3. Combinar y limpiar
     const todasLasFuentes = [...new Set([...domFonts, ...cssFonts])]
       .map((f) => f.replace(/['"]+/g, "").trim());
 
-    // 4. Buscar coincidencias Latinotype
+    // 4. Buscar coincidencias con Latinotype
     const encontrados = todasLasFuentes.filter((f) =>
       latinotypeFonts.some((lf) =>
         normalizarFuente(f).includes(normalizarFuente(lf))
       )
     );
 
-    // 5. Payload con fecha/hora
     const now = new Date();
-    const fecha = now.toISOString().split("T")[0]; // YYYY-MM-DD
-    const hora = now.toLocaleTimeString("en-GB");  // HH:mm:ss
-
     const resultado = {
       url,
       fuentesDetectadas: todasLasFuentes,
       latinotype: encontrados.length > 0 ? encontrados.join(", ") : "Ninguna",
-      fecha,
-      hora,
+      fecha: now.toISOString().split("T")[0],
+      hora: now.toLocaleTimeString("en-GB"),
     };
 
-    // 6. Enviar a Make
+    console.log("📊 Resultado final:", resultado);
+
+    // 5. Enviar a Make
     try {
       const resp = await fetch("https://hook.us2.make.com/3n1u73xoebtzlposueqrmjwjb9z6nqp5", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(resultado),
       });
-      console.log(`📤 Enviado a Make (${resp.status}):`, resultado);
+      console.log(`📤 Enviado a Make (${resp.status})`);
     } catch (e) {
       console.error("❌ Error al enviar a Make:", e.message);
     }
 
     return resultado;
   } catch (err) {
-    await browser.close();
     console.error(`❌ Error al escanear ${url}:`, err.message);
-    return { url, error: err.message };
+    if (browser) await browser.close();
+
+    return {
+      url,
+      error: err.message,
+      fuentesDetectadas: [],
+      latinotype: "Error",
+      fecha: new Date().toISOString().split("T")[0],
+      hora: new Date().toLocaleTimeString("en-GB"),
+    };
   }
 }
 
@@ -114,7 +138,6 @@ app.get("/health", (req, res) => {
 
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
-
   if (!urls || !Array.isArray(urls)) {
     return res.status(400).json({ error: "Debes enviar un array de URLs" });
   }
