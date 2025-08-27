@@ -1,4 +1,4 @@
-module.exports = [
+export default [
   "Aalto Sans One",
   "Acarajé",
   "Acarajé Variable",
