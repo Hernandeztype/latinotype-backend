@@ -21,7 +21,7 @@ function normalizarFuente(nombre) {
     .trim();
 }
 
-// 🔎 Escanear una URL
+// 🔎 Escanear una URL (solo DOM fonts, sin CSS rules)
 async function escanear(url) {
   console.log(`\n🚀 Iniciando escaneo de: ${url}`);
   let browser;
@@ -46,45 +46,25 @@ async function escanear(url) {
     console.log("🌍 Cargando página...");
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
 
-    // ⏳ pequeña espera de 2s
+    // ⏳ pequeña espera
     await new Promise((r) => setTimeout(r, 2000));
     console.log("✅ Página cargada");
 
-    // 1. DOM fonts
+    // 1. DOM fonts (más liviano que revisar CSS rules)
     const domFonts = await page.evaluate(() =>
       [...new Set([...document.querySelectorAll("*")].map(
         (el) => getComputedStyle(el).fontFamily
       ))]
     );
 
-    // 2. CSS fonts
-    const cssFonts = await page.evaluate(() => {
-      const fonts = [];
-      for (const sheet of document.styleSheets) {
-        try {
-          for (const rule of sheet.cssRules) {
-            if (rule.style && rule.style.fontFamily) {
-              fonts.push(rule.style.fontFamily);
-            }
-          }
-        } catch (e) {}
-      }
-      return fonts;
-    });
-
     await browser.close();
 
-    // 3. Combinar + limpiar
-    const todasLasFuentes = [...new Set([...domFonts, ...cssFonts])]
+    // 2. Normalizar + filtrar
+    const todasLasFuentes = [...new Set(domFonts)]
       .map((f) => f.replace(/['"]+/g, "").trim())
-      .filter((f) =>
-        f &&
-        !f.includes("inherit") &&
-        !f.includes("sans-serif") &&
-        !f.includes("object-fit")
-      );
+      .filter((f) => f && !f.includes("inherit") && !f.includes("sans-serif"));
 
-    // 4. Comparar con Latinotype
+    // 3. Buscar coincidencias con Latinotype
     let encontrados = [];
     try {
       encontrados = todasLasFuentes.filter((f) =>
