@@ -36,7 +36,7 @@ async function escanear(url) {
         "--single-process",
       ],
       defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
+      executablePath: process.env.CHROME_PATH || (await chromium.executablePath()),
       headless: chromium.headless,
     });
     console.log("✅ Navegador lanzado");
@@ -52,7 +52,9 @@ async function escanear(url) {
 
     console.log("🌍 Cargando página...");
     await page.goto(url, { waitUntil: "networkidle2", timeout: 120000 });
-    await page.waitForTimeout(5000);
+
+    // ⏳ Espera extra de 5s (compatibilidad con versiones viejas)
+    await new Promise((resolve) => setTimeout(resolve, 5000));
     console.log("✅ Página cargada");
 
     // 1. Extraer fuentes del DOM
@@ -74,7 +76,7 @@ async function escanear(url) {
             }
           }
         } catch (e) {
-          // ignorar errores por CORS
+          // ignorar errores CORS
         }
       }
       return fonts;
