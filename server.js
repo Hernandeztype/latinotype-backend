@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// 🔧 Normalizar nombres de fuentes
+// 🔧 Normalizar fuentes
 function normalizarFuente(nombre) {
   return nombre
     .toLowerCase()
@@ -21,79 +21,75 @@ function normalizarFuente(nombre) {
     .trim();
 }
 
-// 🔎 Escanear una URL (solo DOM fonts, sin CSS rules)
+// 🔎 Escanear una URL con timeout
 async function escanear(url) {
-  console.log(`\n🚀 Iniciando escaneo de: ${url}`);
+  console.log(`\n🚀 Escaneando: ${url}`);
   let browser;
   const inicio = Date.now();
 
   try {
-    browser = await puppeteer.launch({
-      args: [
-        ...chromium.args,
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process",
-      ],
-      defaultViewport: chromium.defaultViewport,
-      executablePath: process.env.CHROME_PATH || (await chromium.executablePath()),
-      headless: chromium.headless,
-    });
-
-    const page = await browser.newPage();
-    console.log("🌍 Cargando página...");
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-
-    // ⏳ pequeña espera
-    await new Promise((r) => setTimeout(r, 2000));
-    console.log("✅ Página cargada");
-
-    // 1. DOM fonts (más liviano que revisar CSS rules)
-    const domFonts = await page.evaluate(() =>
-      [...new Set([...document.querySelectorAll("*")].map(
-        (el) => getComputedStyle(el).fontFamily
-      ))]
+    // Timeout global → aborta después de 20s
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("⏳ Timeout global alcanzado")), 20000)
     );
 
-    await browser.close();
+    const resultado = await Promise.race([
+      (async () => {
+        browser = await puppeteer.launch({
+          args: [
+            ...chromium.args,
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--single-process",
+          ],
+          defaultViewport: chromium.defaultViewport,
+          executablePath: process.env.CHROME_PATH || (await chromium.executablePath()),
+          headless: chromium.headless,
+        });
 
-    // 2. Normalizar + filtrar
-    const todasLasFuentes = [...new Set(domFonts)]
-      .map((f) => f.replace(/['"]+/g, "").trim())
-      .filter((f) => f && !f.includes("inherit") && !f.includes("sans-serif"));
+        const page = await browser.newPage();
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
 
-    // 3. Buscar coincidencias con Latinotype
-    let encontrados = [];
-    try {
-      encontrados = todasLasFuentes.filter((f) =>
-        latinotypeFonts.some((lf) =>
-          normalizarFuente(f).includes(normalizarFuente(lf))
-        )
-      );
-    } catch (err) {
-      console.error("❌ Error en comparación:", err.message);
-    }
+        // Solo analizamos hasta 200 nodos → más liviano
+        const domFonts = await page.evaluate(() => {
+          const nodes = [...document.querySelectorAll("*")].slice(0, 200);
+          return [...new Set(nodes.map(el => getComputedStyle(el).fontFamily))];
+        });
 
-    const now = new Date();
-    const resultado = {
-      url,
-      fuentesDetectadas: todasLasFuentes,
-      latinotype: encontrados.length > 0 ? encontrados.join(", ") : "Ninguna",
-      fecha: now.toISOString().split("T")[0],
-      hora: now.toLocaleTimeString("en-GB"),
-    };
+        await browser.close();
+
+        const todasLasFuentes = [...new Set(domFonts)]
+          .map(f => f.replace(/['"]+/g, "").trim())
+          .filter(f => f && !f.includes("inherit") && !f.includes("sans-serif"));
+
+        const encontrados = todasLasFuentes.filter(f =>
+          latinotypeFonts.some(lf =>
+            normalizarFuente(f).includes(normalizarFuente(lf))
+          )
+        );
+
+        const now = new Date();
+        return {
+          url,
+          fuentesDetectadas: todasLasFuentes,
+          latinotype: encontrados.length > 0 ? encontrados.join(", ") : "Ninguna",
+          fecha: now.toISOString().split("T")[0],
+          hora: now.toLocaleTimeString("en-GB"),
+        };
+      })(),
+      timeoutPromise,
+    ]);
 
     console.log(
-      `📊 Resultado final (${((Date.now() - inicio) / 1000).toFixed(1)}s):`,
+      `📊 Resultado (${((Date.now() - inicio) / 1000).toFixed(1)}s):`,
       resultado
     );
     return resultado;
   } catch (err) {
     if (browser) await browser.close();
-    console.error(`❌ Error al escanear ${url}:`, err.message);
-
+    console.error(`❌ Error en ${url}:`, err.message);
     return {
       url,
       error: err.message,
@@ -105,7 +101,7 @@ async function escanear(url) {
   }
 }
 
-// 📌 Endpoint principal
+// 📌 Endpoints
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
   if (!urls || !Array.isArray(urls)) {
@@ -116,14 +112,10 @@ app.post("/scan", async (req, res) => {
   for (const url of urls) {
     resultados.push(await escanear(url));
   }
-
   res.json({ results: resultados });
 });
 
-// ✅ Endpoint de healthcheck
-app.get("/health", (req, res) => {
-  res.json({ status: "ok" });
-});
+app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 // 🚀 Iniciar servidor
 app.listen(PORT, () => {
