@@ -14,10 +14,10 @@ app.use(express.json());
 function normalizarFuente(nombre) {
   return nombre
     .toLowerCase()
-    .replace(/['"]/g, "")          // quitar comillas
-    .replace(/[-_]/g, " ")         // guiones y underscores → espacio
-    .replace(/\s+/g, " ")          // espacios múltiples → uno solo
-    .replace(/regular|bold|italic|semibold|thin|light|medium/g, "") // quitar estilos comunes
+    .replace(/['"]/g, "")
+    .replace(/[-_]/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/regular|bold|italic|semibold|thin|light|medium/g, "")
     .trim();
 }
 
@@ -25,10 +25,18 @@ function normalizarFuente(nombre) {
 async function escanear(url) {
   console.log(`\n🚀 Iniciando escaneo de: ${url}`);
   let browser;
+  const inicio = Date.now();
 
   try {
     browser = await puppeteer.launch({
-      args: chromium.args,
+      args: [
+        ...chromium.args,
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--single-process",
+      ],
       defaultViewport: chromium.defaultViewport,
       executablePath: process.env.CHROME_PATH || (await chromium.executablePath()),
       headless: chromium.headless,
@@ -36,8 +44,10 @@ async function escanear(url) {
 
     const page = await browser.newPage();
     console.log("🌍 Cargando página...");
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-    await new Promise((r) => setTimeout(r, 3000));
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+    // ⏳ pequeña espera de 2s
+    await new Promise((r) => setTimeout(r, 2000));
     console.log("✅ Página cargada");
 
     // 1. DOM fonts
@@ -74,8 +84,6 @@ async function escanear(url) {
         !f.includes("object-fit")
       );
 
-    console.log("🔤 Fuentes finales:", todasLasFuentes);
-
     // 4. Comparar con Latinotype
     let encontrados = [];
     try {
@@ -97,7 +105,10 @@ async function escanear(url) {
       hora: now.toLocaleTimeString("en-GB"),
     };
 
-    console.log("📊 Resultado final:", resultado);
+    console.log(
+      `📊 Resultado final (${((Date.now() - inicio) / 1000).toFixed(1)}s):`,
+      resultado
+    );
     return resultado;
   } catch (err) {
     if (browser) await browser.close();
@@ -125,6 +136,7 @@ app.post("/scan", async (req, res) => {
   for (const url of urls) {
     resultados.push(await escanear(url));
   }
+
   res.json({ results: resultados });
 });
 
