@@ -1,8 +1,7 @@
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
-import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 import latinotypeFonts from "./data/latinotypeFonts.js";
 
 const app = express();
@@ -15,57 +14,40 @@ app.use(express.json());
 function normalizarFuente(nombre) {
   return nombre
     .toLowerCase()
-    .replace(/['"]/g, "")
-    .replace(/-/g, " ")
+    .replace(/['"]/g, "")          // quitar comillas
+    .replace(/[-_]/g, " ")         // guiones y underscores → espacio
+    .replace(/\s+/g, " ")          // espacios múltiples → uno solo
+    .replace(/regular|bold|italic|semibold|thin|light|medium/g, "") // quitar estilos comunes
     .trim();
 }
 
 // 🔎 Escanear una URL
 async function escanear(url) {
   console.log(`\n🚀 Iniciando escaneo de: ${url}`);
-
   let browser;
+
   try {
     browser = await puppeteer.launch({
-      args: [
-        ...chromium.args,
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process",
-      ],
+      args: chromium.args,
       defaultViewport: chromium.defaultViewport,
       executablePath: process.env.CHROME_PATH || (await chromium.executablePath()),
       headless: chromium.headless,
     });
-    console.log("✅ Navegador lanzado");
 
     const page = await browser.newPage();
-
-    // 👤 User-Agent real
-    await page.setUserAgent(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-        "AppleWebKit/537.36 (KHTML, like Gecko) " +
-        "Chrome/120.0 Safari/537.36"
-    );
-
     console.log("🌍 Cargando página...");
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 120000 });
-
-    // ⏳ Espera extra de 5s (compatibilidad con versiones viejas)
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+    await new Promise((r) => setTimeout(r, 3000));
     console.log("✅ Página cargada");
 
-    // 1. Extraer fuentes del DOM
+    // 1. DOM fonts
     const domFonts = await page.evaluate(() =>
       [...new Set([...document.querySelectorAll("*")].map(
         (el) => getComputedStyle(el).fontFamily
       ))]
     );
-    console.log("🔤 Fuentes DOM detectadas:", domFonts);
 
-    // 2. Extraer fuentes de CSS
+    // 2. CSS fonts
     const cssFonts = await page.evaluate(() => {
       const fonts = [];
       for (const sheet of document.styleSheets) {
@@ -75,27 +57,36 @@ async function escanear(url) {
               fonts.push(rule.style.fontFamily);
             }
           }
-        } catch (e) {
-          // ignorar errores CORS
-        }
+        } catch (e) {}
       }
       return fonts;
     });
-    console.log("📄 Fuentes CSS detectadas:", cssFonts);
 
     await browser.close();
-    console.log("✅ Navegador cerrado");
 
-    // 3. Combinar y limpiar
+    // 3. Combinar + limpiar
     const todasLasFuentes = [...new Set([...domFonts, ...cssFonts])]
-      .map((f) => f.replace(/['"]+/g, "").trim());
+      .map((f) => f.replace(/['"]+/g, "").trim())
+      .filter((f) =>
+        f &&
+        !f.includes("inherit") &&
+        !f.includes("sans-serif") &&
+        !f.includes("object-fit")
+      );
 
-    // 4. Buscar coincidencias con Latinotype
-    const encontrados = todasLasFuentes.filter((f) =>
-      latinotypeFonts.some((lf) =>
-        normalizarFuente(f).includes(normalizarFuente(lf))
-      )
-    );
+    console.log("🔤 Fuentes finales:", todasLasFuentes);
+
+    // 4. Comparar con Latinotype
+    let encontrados = [];
+    try {
+      encontrados = todasLasFuentes.filter((f) =>
+        latinotypeFonts.some((lf) =>
+          normalizarFuente(f).includes(normalizarFuente(lf))
+        )
+      );
+    } catch (err) {
+      console.error("❌ Error en comparación:", err.message);
+    }
 
     const now = new Date();
     const resultado = {
@@ -107,23 +98,10 @@ async function escanear(url) {
     };
 
     console.log("📊 Resultado final:", resultado);
-
-    // 5. Enviar a Make
-    try {
-      const resp = await fetch("https://hook.us2.make.com/3n1u73xoebtzlposueqrmjwjb9z6nqp5", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(resultado),
-      });
-      console.log(`📤 Enviado a Make (${resp.status})`);
-    } catch (e) {
-      console.error("❌ Error al enviar a Make:", e.message);
-    }
-
     return resultado;
   } catch (err) {
-    console.error(`❌ Error al escanear ${url}:`, err.message);
     if (browser) await browser.close();
+    console.error(`❌ Error al escanear ${url}:`, err.message);
 
     return {
       url,
@@ -136,27 +114,23 @@ async function escanear(url) {
   }
 }
 
-// ✅ Endpoints
-app.get("/", (req, res) => {
-  res.send("🚀 Backend de Latinotype Scanner funcionando");
-});
-
-app.get("/health", (req, res) => {
-  res.json({ status: "ok" });
-});
-
+// 📌 Endpoint principal
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
   if (!urls || !Array.isArray(urls)) {
     return res.status(400).json({ error: "Debes enviar un array de URLs" });
   }
 
-  const results = [];
+  const resultados = [];
   for (const url of urls) {
-    results.push(await escanear(url));
+    resultados.push(await escanear(url));
   }
+  res.json({ results: resultados });
+});
 
-  res.json({ results });
+// ✅ Endpoint de healthcheck
+app.get("/health", (req, res) => {
+  res.json({ status: "ok" });
 });
 
 // 🚀 Iniciar servidor
