@@ -1,10 +1,10 @@
-// server.js (V10.1 optimizado)
+// server.js (V10.2)
 import express from "express";
 import bodyParser from "body-parser";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import cors from "cors";
-import fetch from "node-fetch";
+import fetch from "node-fetch"; // 👈 para enviar a Make
 import latinotypeFonts from "./data/latinotypeFonts.js";
 
 const app = express();
@@ -13,17 +13,17 @@ const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(bodyParser.json());
 
-// ✅ Limpiar nombres de fuentes
 function cleanFontName(name) {
   return name.replace(/['"]/g, "").replace(/;/g, "").trim();
 }
 
-// ✅ Procesar fuentes y detectar Latinotype
 function processFonts(fuentesDetectadas, latinotypeFonts) {
-  const clean = [...new Set(fuentesDetectadas.map(cleanFontName))];
+  const clean = [...new Set(fuentesDetectadas.map(cleanFontName).filter(Boolean))];
+
   const latinotypeDetected = latinotypeFonts.filter((lt) =>
     clean.some((f) => f.toLowerCase().includes(lt.toLowerCase()))
   );
+
   return {
     fuentesDetectadas: clean,
     latinotype:
@@ -31,12 +31,10 @@ function processFonts(fuentesDetectadas, latinotypeFonts) {
   };
 }
 
-// ✅ Healthcheck
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// ✅ Endpoint principal
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
   if (!urls || !Array.isArray(urls)) {
@@ -47,10 +45,8 @@ app.post("/scan", async (req, res) => {
 
   for (const url of urls) {
     console.log(`🚀 Escaneando: ${url}`);
-    let browser = null;
-
     try {
-      browser = await puppeteer.launch({
+      const browser = await puppeteer.launch({
         args: chromium.args,
         defaultViewport: chromium.defaultViewport,
         executablePath: await chromium.executablePath(),
@@ -58,58 +54,70 @@ app.post("/scan", async (req, res) => {
       });
 
       const page = await browser.newPage();
-
-      // ⚡️ Bloquear imágenes, videos y fuentes externas pesadas
-      await page.setRequestInterception(true);
-      page.on("request", (req) => {
-        if (["image", "media", "stylesheet", "font"].includes(req.resourceType())) {
-          req.abort();
-        } else {
-          req.continue();
-        }
-      });
-
-      // ⏳ Timeout balanceado
-      await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
       console.log("✅ Página cargada");
 
-      // 🔍 Detectar fuentes
+      // --- DOM fonts
       const fuentesDom = await page.evaluate(() =>
-        Array.from(document.querySelectorAll("*")).map((el) =>
-          window.getComputedStyle(el).getPropertyValue("font-family")
-        )
+        Array.from(document.querySelectorAll("*"))
+          .map((el) => window.getComputedStyle(el).getPropertyValue("font-family"))
+          .filter(Boolean)
       );
 
+      // --- CSS fonts
+      const fuentesCss = await page.evaluate(() => {
+        try {
+          return Array.from(document.styleSheets)
+            .map((sheet) => {
+              try {
+                return Array.from(sheet.cssRules || []);
+              } catch {
+                return [];
+              }
+            })
+            .flat()
+            .map((rule) => rule.style && rule.style.fontFamily)
+            .filter(Boolean);
+        } catch {
+          return [];
+        }
+      });
+
+      const allFonts = [...fuentesDom, ...fuentesCss];
+      console.log("🔤 Fuentes detectadas:", allFonts);
+
       const { fuentesDetectadas, latinotype } = processFonts(
-        fuentesDom,
+        allFonts,
         latinotypeFonts
       );
 
       const fecha = new Date().toISOString().split("T")[0];
-      const hora = new Date().toLocaleTimeString("es-CL", {
-        timeZone: "America/Santiago",
-      });
+      const hora = new Date().toLocaleTimeString("es-CL", { timeZone: "America/Santiago" });
 
-      results.push({ url, fuentesDetectadas, latinotype, fecha, hora });
+      const result = {
+        url,
+        fuentesDetectadas,
+        latinotype,
+        fecha,
+        hora,
+      };
 
-      // 📤 Enviar a Make
+      results.push(result);
+
+      // Enviar a Make
       try {
         await fetch("https://hook.us2.make.com/3n1u73xoebtzlposueqrmjwjb9z6nqp5", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fecha,
-            hora,
-            url,
-            fuentesDetectadas: fuentesDetectadas.join(", "),
-            latinotype,
-          }),
+          body: JSON.stringify(result),
         });
-        console.log(`📤 Enviado a Make: ${url}`);
+        console.log("📤 Enviado a Make:", result);
       } catch (err) {
-        console.error("⚠️ Error enviando a Make:", err.message);
+        console.error("❌ Error enviando a Make:", err.message);
       }
+
+      await browser.close();
     } catch (error) {
       console.error(`❌ Error en ${url}:`, error.message);
       results.push({
@@ -117,21 +125,14 @@ app.post("/scan", async (req, res) => {
         fuentesDetectadas: [],
         latinotype: "Error",
         fecha: new Date().toISOString().split("T")[0],
-        hora: new Date().toLocaleTimeString("es-CL", {
-          timeZone: "America/Santiago",
-        }),
+        hora: new Date().toLocaleTimeString("es-CL", { timeZone: "America/Santiago" }),
       });
-    } finally {
-      if (browser) {
-        await browser.close().catch(() => {});
-      }
     }
   }
 
   res.json({ results });
 });
 
-// ✅ Iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Backend corriendo en puerto ${PORT}`);
 });
