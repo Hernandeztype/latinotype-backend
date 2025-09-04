@@ -1,12 +1,25 @@
-// server.js (V9.2)
+// server.js (V9.3 con CORS fix)
 import express from "express";
 import bodyParser from "body-parser";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import latinotypeFonts from "./data/latinotypeFonts.js";
+import cors from "cors";
 
 const app = express();
 app.use(bodyParser.json());
+
+// ✅ Configuración de CORS
+app.use(
+  cors({
+    origin: [
+      "https://latinotype-frontend.onrender.com",
+      "http://localhost:5173",
+    ],
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
 
 const PORT = process.env.PORT || 10000;
 
@@ -24,7 +37,7 @@ function processFonts(fuentesDetectadas, latinotypeFonts) {
   );
 
   return {
-    fuentesDetectadas: clean, // todas las fuentes (incluidas genéricas)
+    fuentesDetectadas: clean,
     latinotype:
       latinotypeDetected.length > 0
         ? latinotypeDetected.join(", ")
@@ -66,7 +79,6 @@ app.post("/scan", async (req, res) => {
 
       console.log("✅ Página cargada");
 
-      // fuentes desde DOM
       const fuentesDom = await page.evaluate(() => {
         const elements = Array.from(document.querySelectorAll("*"));
         const fonts = elements.map((el) =>
@@ -75,7 +87,6 @@ app.post("/scan", async (req, res) => {
         return [...new Set(fonts)];
       });
 
-      // fuentes desde CSS
       const fuentesCss = await page.evaluate(() => {
         const rules = Array.from(document.styleSheets)
           .map((sheet) => {
