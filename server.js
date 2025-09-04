@@ -1,25 +1,24 @@
-// server.js (con integración a Make)
+// server.js (V10)
 import express from "express";
 import bodyParser from "body-parser";
-import puppeteer from "puppeteer-core"; 
+import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import cors from "cors";
-import fetch from "node-fetch"; // 👈 para enviar al webhook
+import fetch from "node-fetch"; // 👈 necesario para enviar a Make
 import latinotypeFonts from "./data/latinotypeFonts.js";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/3n1u73xoebtzlposueqrmjwjb9z6nqp5";
 
 app.use(cors());
 app.use(bodyParser.json());
 
-// limpiar nombres de fuentes
+// 🔹 limpiar nombres de fuentes
 function cleanFontName(name) {
   return name.replace(/['"]/g, "").replace(/;/g, "").trim();
 }
 
-// procesar fuentes detectadas y separar Latinotype
+// 🔹 separar fuentes detectadas vs Latinotype
 function processFonts(fuentesDetectadas, latinotypeFonts) {
   const clean = [...new Set(fuentesDetectadas.map(cleanFontName))];
   const latinotypeDetected = latinotypeFonts.filter((lt) =>
@@ -32,12 +31,12 @@ function processFonts(fuentesDetectadas, latinotypeFonts) {
   };
 }
 
-// healthcheck
+// 🔹 healthcheck
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// endpoint principal
+// 🔹 endpoint principal
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
   if (!urls || !Array.isArray(urls)) {
@@ -59,7 +58,7 @@ app.post("/scan", async (req, res) => {
       const page = await browser.newPage();
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-      // fuentes desde DOM
+      // fuentes desde el DOM
       const fuentesDom = await page.evaluate(() =>
         Array.from(document.querySelectorAll("*")).map((el) =>
           window.getComputedStyle(el).getPropertyValue("font-family")
@@ -71,25 +70,38 @@ app.post("/scan", async (req, res) => {
         latinotypeFonts
       );
 
+      // fecha y hora ajustadas a Chile
       const fecha = new Date().toISOString().split("T")[0];
-      const hora = new Date().toLocaleTimeString();
+      const hora = new Date().toLocaleTimeString("es-CL", {
+        timeZone: "America/Santiago",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
 
-      const result = { url, fuentesDetectadas, latinotype, fecha, hora };
-      results.push(result);
+      const resultado = {
+        url,
+        fuentesDetectadas,
+        latinotype,
+        fecha,
+        hora,
+      };
 
-      await browser.close();
+      results.push(resultado);
 
-      // 🔗 enviar cada resultado a Make
+      // 📤 enviar a Make
       try {
-        await fetch(MAKE_WEBHOOK_URL, {
+        await fetch("https://hook.us2.make.com/3n1u73xoebtzlposueqrmjwjb9z6nqp5", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(result),
+          body: JSON.stringify(resultado),
         });
         console.log(`📤 Enviado a Make: ${url}`);
       } catch (err) {
-        console.error("⚠️ Error enviando a Make:", err.message);
+        console.error("❌ Error enviando a Make:", err.message);
       }
+
+      await browser.close();
     } catch (error) {
       console.error(`❌ Error en ${url}:`, error.message);
       results.push({
@@ -97,7 +109,12 @@ app.post("/scan", async (req, res) => {
         fuentesDetectadas: [],
         latinotype: "Error",
         fecha: new Date().toISOString().split("T")[0],
-        hora: new Date().toLocaleTimeString(),
+        hora: new Date().toLocaleTimeString("es-CL", {
+          timeZone: "America/Santiago",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
       });
     }
   }
@@ -105,7 +122,7 @@ app.post("/scan", async (req, res) => {
   res.json({ results });
 });
 
-// iniciar servidor
+// 🔹 iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Backend corriendo en puerto ${PORT}`);
 });
