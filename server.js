@@ -1,10 +1,11 @@
-// server.js (V9.4 - Render ready)
+// server.js (V9.5 con fallback robusto de Chrome/Chromium)
 import express from "express";
 import bodyParser from "body-parser";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import latinotypeFonts from "./data/latinotypeFonts.js";
 import cors from "cors";
+import fs from "fs";
 
 const app = express();
 app.use(bodyParser.json());
@@ -50,6 +51,24 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
+// 🔹 resolver ruta de Chrome/Chromium en Render
+async function getExecutablePath() {
+  const paths = [
+    await chromium.executablePath, // preferido por @sparticuz/chromium
+    "/usr/bin/google-chrome-stable", // Render suele usar esta
+    "/usr/bin/chromium-browser", // fallback
+  ];
+
+  for (const p of paths) {
+    if (p && fs.existsSync(p)) {
+      console.log(`✅ Usando navegador en: ${p}`);
+      return p;
+    }
+  }
+
+  throw new Error("❌ No se encontró un navegador válido en Render");
+}
+
 // 🔹 endpoint principal
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
@@ -64,8 +83,7 @@ app.post("/scan", async (req, res) => {
     try {
       const browser = await puppeteer.launch({
         args: chromium.args,
-        executablePath:
-          (await chromium.executablePath) || "/usr/bin/chromium-browser",
+        executablePath: await getExecutablePath(),
         headless: chromium.headless,
         defaultViewport: chromium.defaultViewport,
       });
