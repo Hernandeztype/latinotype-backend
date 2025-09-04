@@ -1,35 +1,20 @@
-// server.js (V9.5 con fallback robusto de Chrome/Chromium)
+// server.js (V10.0 - Render ready con puppeteer completo)
 import express from "express";
 import bodyParser from "body-parser";
-import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
+import puppeteer from "puppeteer";
 import latinotypeFonts from "./data/latinotypeFonts.js";
-import cors from "cors";
-import fs from "fs";
 
 const app = express();
 app.use(bodyParser.json());
 
-// ✅ Configuración de CORS
-app.use(
-  cors({
-    origin: [
-      "https://latinotype-frontend.onrender.com", // frontend en Render
-      "http://localhost:5173", // pruebas locales
-    ],
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-  })
-);
-
 const PORT = process.env.PORT || 10000;
 
-// 🔹 limpiar nombres de fuentes
+// limpiar nombres de fuentes
 function cleanFontName(name) {
   return name.replace(/['"]/g, "").replace(/;/g, "").trim();
 }
 
-// 🔹 procesar fuentes detectadas y separar Latinotype
+// procesar fuentes detectadas y separar Latinotype
 function processFonts(fuentesDetectadas, latinotypeFonts) {
   const clean = [...new Set(fuentesDetectadas.map(cleanFontName))];
 
@@ -40,36 +25,16 @@ function processFonts(fuentesDetectadas, latinotypeFonts) {
   return {
     fuentesDetectadas: clean,
     latinotype:
-      latinotypeDetected.length > 0
-        ? latinotypeDetected.join(", ")
-        : "Ninguna",
+      latinotypeDetected.length > 0 ? latinotypeDetected.join(", ") : "Ninguna",
   };
 }
 
-// 🔹 healthcheck
+// healthcheck
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// 🔹 resolver ruta de Chrome/Chromium en Render
-async function getExecutablePath() {
-  const paths = [
-    await chromium.executablePath, // preferido por @sparticuz/chromium
-    "/usr/bin/google-chrome-stable", // Render suele usar esta
-    "/usr/bin/chromium-browser", // fallback
-  ];
-
-  for (const p of paths) {
-    if (p && fs.existsSync(p)) {
-      console.log(`✅ Usando navegador en: ${p}`);
-      return p;
-    }
-  }
-
-  throw new Error("❌ No se encontró un navegador válido en Render");
-}
-
-// 🔹 endpoint principal
+// endpoint principal
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
   if (!urls || !Array.isArray(urls)) {
@@ -82,10 +47,8 @@ app.post("/scan", async (req, res) => {
     console.log(`🚀 Escaneando: ${url}`);
     try {
       const browser = await puppeteer.launch({
-        args: chromium.args,
-        executablePath: await getExecutablePath(),
-        headless: chromium.headless,
-        defaultViewport: chromium.defaultViewport,
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
       });
 
       const page = await browser.newPage();
