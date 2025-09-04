@@ -1,13 +1,15 @@
-// server.js (V11.2)
+// server.js (con integración a Make)
 import express from "express";
 import bodyParser from "body-parser";
-import puppeteer from "puppeteer-core";
+import puppeteer from "puppeteer-core"; 
 import chromium from "@sparticuz/chromium";
 import cors from "cors";
+import fetch from "node-fetch"; // 👈 para enviar al webhook
 import latinotypeFonts from "./data/latinotypeFonts.js";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
+const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/3n1u73xoebtzlposueqrmjwjb9z6nqp5";
 
 app.use(cors());
 app.use(bodyParser.json());
@@ -17,7 +19,7 @@ function cleanFontName(name) {
   return name.replace(/['"]/g, "").replace(/;/g, "").trim();
 }
 
-// separar fuentes detectadas vs Latinotype
+// procesar fuentes detectadas y separar Latinotype
 function processFonts(fuentesDetectadas, latinotypeFonts) {
   const clean = [...new Set(fuentesDetectadas.map(cleanFontName))];
   const latinotypeDetected = latinotypeFonts.filter((lt) =>
@@ -35,7 +37,7 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// endpoint de escaneo
+// endpoint principal
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
   if (!urls || !Array.isArray(urls)) {
@@ -49,12 +51,9 @@ app.post("/scan", async (req, res) => {
     try {
       const browser = await puppeteer.launch({
         args: chromium.args,
-        headless: true,
         defaultViewport: chromium.defaultViewport,
-        executablePath:
-          (await chromium.executablePath()) ||
-          "/usr/bin/google-chrome-stable" ||
-          "/usr/bin/chromium-browser", // 👈 fallback para Render
+        executablePath: await chromium.executablePath(),
+        headless: chromium.headless,
       });
 
       const page = await browser.newPage();
@@ -72,15 +71,25 @@ app.post("/scan", async (req, res) => {
         latinotypeFonts
       );
 
-      results.push({
-        url,
-        fuentesDetectadas,
-        latinotype,
-        fecha: new Date().toISOString().split("T")[0],
-        hora: new Date().toLocaleTimeString(),
-      });
+      const fecha = new Date().toISOString().split("T")[0];
+      const hora = new Date().toLocaleTimeString();
+
+      const result = { url, fuentesDetectadas, latinotype, fecha, hora };
+      results.push(result);
 
       await browser.close();
+
+      // 🔗 enviar cada resultado a Make
+      try {
+        await fetch(MAKE_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(result),
+        });
+        console.log(`📤 Enviado a Make: ${url}`);
+      } catch (err) {
+        console.error("⚠️ Error enviando a Make:", err.message);
+      }
     } catch (error) {
       console.error(`❌ Error en ${url}:`, error.message);
       results.push({
