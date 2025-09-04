@@ -1,10 +1,10 @@
-// server.js (V10)
+// server.js (V10.1 optimizado)
 import express from "express";
 import bodyParser from "body-parser";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import cors from "cors";
-import fetch from "node-fetch"; // 👈 necesario para enviar a Make
+import fetch from "node-fetch";
 import latinotypeFonts from "./data/latinotypeFonts.js";
 
 const app = express();
@@ -13,12 +13,12 @@ const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(bodyParser.json());
 
-// 🔹 limpiar nombres de fuentes
+// ✅ Limpiar nombres de fuentes
 function cleanFontName(name) {
   return name.replace(/['"]/g, "").replace(/;/g, "").trim();
 }
 
-// 🔹 separar fuentes detectadas vs Latinotype
+// ✅ Procesar fuentes y detectar Latinotype
 function processFonts(fuentesDetectadas, latinotypeFonts) {
   const clean = [...new Set(fuentesDetectadas.map(cleanFontName))];
   const latinotypeDetected = latinotypeFonts.filter((lt) =>
@@ -31,12 +31,12 @@ function processFonts(fuentesDetectadas, latinotypeFonts) {
   };
 }
 
-// 🔹 healthcheck
+// ✅ Healthcheck
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// 🔹 endpoint principal
+// ✅ Endpoint principal
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
   if (!urls || !Array.isArray(urls)) {
@@ -47,8 +47,10 @@ app.post("/scan", async (req, res) => {
 
   for (const url of urls) {
     console.log(`🚀 Escaneando: ${url}`);
+    let browser = null;
+
     try {
-      const browser = await puppeteer.launch({
+      browser = await puppeteer.launch({
         args: chromium.args,
         defaultViewport: chromium.defaultViewport,
         executablePath: await chromium.executablePath(),
@@ -56,9 +58,23 @@ app.post("/scan", async (req, res) => {
       });
 
       const page = await browser.newPage();
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-      // fuentes desde el DOM
+      // ⚡️ Bloquear imágenes, videos y fuentes externas pesadas
+      await page.setRequestInterception(true);
+      page.on("request", (req) => {
+        if (["image", "media", "stylesheet", "font"].includes(req.resourceType())) {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
+
+      // ⏳ Timeout balanceado
+      await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
+
+      console.log("✅ Página cargada");
+
+      // 🔍 Detectar fuentes
       const fuentesDom = await page.evaluate(() =>
         Array.from(document.querySelectorAll("*")).map((el) =>
           window.getComputedStyle(el).getPropertyValue("font-family")
@@ -70,38 +86,30 @@ app.post("/scan", async (req, res) => {
         latinotypeFonts
       );
 
-      // fecha y hora ajustadas a Chile
       const fecha = new Date().toISOString().split("T")[0];
       const hora = new Date().toLocaleTimeString("es-CL", {
         timeZone: "America/Santiago",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
       });
 
-      const resultado = {
-        url,
-        fuentesDetectadas,
-        latinotype,
-        fecha,
-        hora,
-      };
+      results.push({ url, fuentesDetectadas, latinotype, fecha, hora });
 
-      results.push(resultado);
-
-      // 📤 enviar a Make
+      // 📤 Enviar a Make
       try {
         await fetch("https://hook.us2.make.com/3n1u73xoebtzlposueqrmjwjb9z6nqp5", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(resultado),
+          body: JSON.stringify({
+            fecha,
+            hora,
+            url,
+            fuentesDetectadas: fuentesDetectadas.join(", "),
+            latinotype,
+          }),
         });
         console.log(`📤 Enviado a Make: ${url}`);
       } catch (err) {
-        console.error("❌ Error enviando a Make:", err.message);
+        console.error("⚠️ Error enviando a Make:", err.message);
       }
-
-      await browser.close();
     } catch (error) {
       console.error(`❌ Error en ${url}:`, error.message);
       results.push({
@@ -111,18 +119,19 @@ app.post("/scan", async (req, res) => {
         fecha: new Date().toISOString().split("T")[0],
         hora: new Date().toLocaleTimeString("es-CL", {
           timeZone: "America/Santiago",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
         }),
       });
+    } finally {
+      if (browser) {
+        await browser.close().catch(() => {});
+      }
     }
   }
 
   res.json({ results });
 });
 
-// 🔹 iniciar servidor
+// ✅ Iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Backend corriendo en puerto ${PORT}`);
 });
