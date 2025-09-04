@@ -1,79 +1,117 @@
+// server.js (V9.2)
 import express from "express";
-import cors from "cors";
+import bodyParser from "body-parser";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import latinotypeFonts from "./data/latinotypeFonts.js";
 
 const app = express();
+app.use(bodyParser.json());
+
 const PORT = process.env.PORT || 10000;
 
-// ✅ Middleware
-app.use(express.json());
-app.use(
-  cors({
-    origin: "*", // permite desde cualquier frontend
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-  })
-);
+// limpiar nombres de fuentes
+function cleanFontName(name) {
+  return name.replace(/['"]/g, "").replace(/;/g, "").trim();
+}
 
-// ✅ Ruta raíz para evitar el 404 de Render
-app.get("/", (req, res) => {
-  res.send("🚀 Latinotype Scanner Backend corriendo");
-});
+// procesar fuentes detectadas y separar Latinotype
+function processFonts(fuentesDetectadas, latinotypeFonts) {
+  const clean = [...new Set(fuentesDetectadas.map(cleanFontName))];
 
-// ✅ Healthcheck
+  const latinotypeDetected = latinotypeFonts.filter((lt) =>
+    clean.some((f) => f.toLowerCase().includes(lt.toLowerCase()))
+  );
+
+  return {
+    fuentesDetectadas: clean, // todas las fuentes (incluidas genéricas)
+    latinotype:
+      latinotypeDetected.length > 0
+        ? latinotypeDetected.join(", ")
+        : "Ninguna",
+  };
+}
+
+// healthcheck
 app.get("/health", (req, res) => {
-  res.json({ status: "OK 🚀" });
+  res.json({ status: "ok" });
 });
 
-// ✅ Endpoint de escaneo
+// endpoint principal
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
   if (!urls || !Array.isArray(urls)) {
-    return res.status(400).json({ error: "Falta 'urls' en el body" });
+    return res.status(400).json({ error: "Debes enviar un array de URLs" });
   }
 
   const results = [];
+
   for (const url of urls) {
     console.log(`🚀 Escaneando: ${url}`);
     try {
       const browser = await puppeteer.launch({
         args: chromium.args,
-        executablePath: await chromium.executablePath(),
+        executablePath:
+          (await chromium.executablePath) ||
+          "/usr/bin/chromium-browser",
         headless: chromium.headless,
+        defaultViewport: chromium.defaultViewport,
       });
 
       const page = await browser.newPage();
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-      // 🔤 Detectar fuentes
-      const fuentes = await page.evaluate(() => {
-        const elements = [...document.querySelectorAll("*")];
-        const fonts = new Set();
-        elements.forEach((el) => {
-          const style = window.getComputedStyle(el).getPropertyValue("font-family");
-          if (style) fonts.add(style);
-        });
-        return Array.from(fonts);
+      await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
       });
 
-      await browser.close();
+      console.log("✅ Página cargada");
 
-      // 📊 Revisar si alguna fuente es Latinotype
-      const latinotypeMatch = fuentes.find((f) =>
-        latinotypeFonts.some((lt) => f.toLowerCase().includes(lt.toLowerCase()))
+      // fuentes desde DOM
+      const fuentesDom = await page.evaluate(() => {
+        const elements = Array.from(document.querySelectorAll("*"));
+        const fonts = elements.map((el) =>
+          window.getComputedStyle(el).getPropertyValue("font-family")
+        );
+        return [...new Set(fonts)];
+      });
+
+      // fuentes desde CSS
+      const fuentesCss = await page.evaluate(() => {
+        const rules = Array.from(document.styleSheets)
+          .map((sheet) => {
+            try {
+              return Array.from(sheet.cssRules || []);
+            } catch {
+              return [];
+            }
+          })
+          .flat();
+
+        const fonts = rules
+          .map((rule) => rule.style && rule.style.fontFamily)
+          .filter(Boolean);
+        return [...new Set(fonts)];
+      });
+
+      const { fuentesDetectadas, latinotype } = processFonts(
+        fuentesDom.concat(fuentesCss),
+        latinotypeFonts
       );
+
+      const fecha = new Date().toISOString().split("T")[0];
+      const hora = new Date().toLocaleTimeString();
 
       results.push({
         url,
-        fuentesDetectadas: fuentes,
-        latinotype: latinotypeMatch || "Ninguna",
-        fecha: new Date().toISOString().split("T")[0],
-        hora: new Date().toLocaleTimeString(),
+        fuentesDetectadas,
+        latinotype,
+        fecha,
+        hora,
       });
-    } catch (err) {
-      console.error(`❌ Error en ${url}:`, err.message);
+
+      await browser.close();
+    } catch (error) {
+      console.error(`❌ Error en ${url}:`, error.message);
       results.push({
         url,
         fuentesDetectadas: [],
@@ -87,7 +125,7 @@ app.post("/scan", async (req, res) => {
   res.json({ results });
 });
 
-// ✅ Arranque del servidor
+// iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Backend corriendo en puerto ${PORT}`);
 });
