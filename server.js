@@ -1,27 +1,27 @@
-// server.js (V10.0 - Render ready con puppeteer completo)
+// server.js (V10.1 con CORS)
 import express from "express";
 import bodyParser from "body-parser";
 import puppeteer from "puppeteer";
 import latinotypeFonts from "./data/latinotypeFonts.js";
+import cors from "cors";
 
 const app = express();
-app.use(bodyParser.json());
-
 const PORT = process.env.PORT || 10000;
+
+// Middlewares
+app.use(bodyParser.json());
+app.use(cors()); // 👈 Habilita CORS para todas las rutas
 
 // limpiar nombres de fuentes
 function cleanFontName(name) {
   return name.replace(/['"]/g, "").replace(/;/g, "").trim();
 }
 
-// procesar fuentes detectadas y separar Latinotype
 function processFonts(fuentesDetectadas, latinotypeFonts) {
   const clean = [...new Set(fuentesDetectadas.map(cleanFontName))];
-
   const latinotypeDetected = latinotypeFonts.filter((lt) =>
     clean.some((f) => f.toLowerCase().includes(lt.toLowerCase()))
   );
-
   return {
     fuentesDetectadas: clean,
     latinotype:
@@ -29,12 +29,12 @@ function processFonts(fuentesDetectadas, latinotypeFonts) {
   };
 }
 
-// healthcheck
+// Healthcheck
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// endpoint principal
+// Endpoint principal
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
   if (!urls || !Array.isArray(urls)) {
@@ -42,65 +42,28 @@ app.post("/scan", async (req, res) => {
   }
 
   const results = [];
-
   for (const url of urls) {
     console.log(`🚀 Escaneando: ${url}`);
     try {
-      const browser = await puppeteer.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      });
-
+      const browser = await puppeteer.launch({ headless: true });
       const page = await browser.newPage();
-      await page.goto(url, {
-        waitUntil: "domcontentloaded",
-        timeout: 60000,
-      });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-      console.log("✅ Página cargada");
-
-      // fuentes desde DOM
-      const fuentesDom = await page.evaluate(() => {
-        const elements = Array.from(document.querySelectorAll("*"));
-        const fonts = elements.map((el) =>
+      const fuentesDom = await page.evaluate(() =>
+        Array.from(document.querySelectorAll("*")).map((el) =>
           window.getComputedStyle(el).getPropertyValue("font-family")
-        );
-        return [...new Set(fonts)];
-      });
-
-      // fuentes desde CSS
-      const fuentesCss = await page.evaluate(() => {
-        const rules = Array.from(document.styleSheets)
-          .map((sheet) => {
-            try {
-              return Array.from(sheet.cssRules || []);
-            } catch {
-              return [];
-            }
-          })
-          .flat();
-
-        const fonts = rules
-          .map((rule) => rule.style && rule.style.fontFamily)
-          .filter(Boolean);
-        return [...new Set(fonts)];
-      });
+        )
+      );
 
       const { fuentesDetectadas, latinotype } = processFonts(
-        fuentesDom.concat(fuentesCss),
+        fuentesDom,
         latinotypeFonts
       );
 
       const fecha = new Date().toISOString().split("T")[0];
       const hora = new Date().toLocaleTimeString();
 
-      results.push({
-        url,
-        fuentesDetectadas,
-        latinotype,
-        fecha,
-        hora,
-      });
+      results.push({ url, fuentesDetectadas, latinotype, fecha, hora });
 
       await browser.close();
     } catch (error) {
@@ -118,7 +81,6 @@ app.post("/scan", async (req, res) => {
   res.json({ results });
 });
 
-// iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Backend corriendo en puerto ${PORT}`);
 });
