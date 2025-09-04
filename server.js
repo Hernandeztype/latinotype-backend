@@ -1,18 +1,16 @@
-// server.js (V10.1 con CORS)
 import express from "express";
 import bodyParser from "body-parser";
-import puppeteer from "puppeteer";
-import latinotypeFonts from "./data/latinotypeFonts.js";
+import puppeteer from "puppeteer-core"; // 👈 puppeteer-core, no puppeteer normal
+import chromium from "@sparticuz/chromium"; // 👈 binario empaquetado
 import cors from "cors";
+import latinotypeFonts from "./data/latinotypeFonts.js";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Middlewares
+app.use(cors());
 app.use(bodyParser.json());
-app.use(cors()); // 👈 Habilita CORS para todas las rutas
 
-// limpiar nombres de fuentes
 function cleanFontName(name) {
   return name.replace(/['"]/g, "").replace(/;/g, "").trim();
 }
@@ -29,12 +27,10 @@ function processFonts(fuentesDetectadas, latinotypeFonts) {
   };
 }
 
-// Healthcheck
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// Endpoint principal
 app.post("/scan", async (req, res) => {
   const { urls } = req.body;
   if (!urls || !Array.isArray(urls)) {
@@ -42,10 +38,17 @@ app.post("/scan", async (req, res) => {
   }
 
   const results = [];
+
   for (const url of urls) {
     console.log(`🚀 Escaneando: ${url}`);
     try {
-      const browser = await puppeteer.launch({ headless: true });
+      const browser = await puppeteer.launch({
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath(), // 👈 Render/Serverless-friendly
+        headless: chromium.headless,
+      });
+
       const page = await browser.newPage();
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
@@ -60,10 +63,13 @@ app.post("/scan", async (req, res) => {
         latinotypeFonts
       );
 
-      const fecha = new Date().toISOString().split("T")[0];
-      const hora = new Date().toLocaleTimeString();
-
-      results.push({ url, fuentesDetectadas, latinotype, fecha, hora });
+      results.push({
+        url,
+        fuentesDetectadas,
+        latinotype,
+        fecha: new Date().toISOString().split("T")[0],
+        hora: new Date().toLocaleTimeString(),
+      });
 
       await browser.close();
     } catch (error) {
